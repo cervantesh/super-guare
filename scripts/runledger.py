@@ -267,6 +267,8 @@ def validate_state(state: dict) -> None:
                 raise ValueError("unit")
             if not isinstance(unit.get("covers"), list) or not isinstance(unit.get("depends_on"), list):
                 raise ValueError("unit fields")
+            if any(not isinstance(member, str) for member in unit["covers"] + unit["depends_on"]):
+                raise ValueError("unit member")
         for finding in state["findings"]:
             if not isinstance(finding, dict) or finding.get("severity") not in {"P0", "P1", "P2", "P3"}:
                 raise ValueError("finding")
@@ -274,6 +276,9 @@ def validate_state(state: dict) -> None:
                 raise ValueError("finding decision")
             for key, expected in (("id", str), ("defect_id", str), ("summary", str), ("round", int)):
                 if not isinstance(finding.get(key), expected):
+                    raise ValueError(f"finding.{key}")
+            for key, expected in (("confirmed_round", int), ("confirmed_head", str)):
+                if key in finding and finding[key] is not None and not isinstance(finding[key], expected):
                     raise ValueError(f"finding.{key}")
     except (KeyError, TypeError, ValueError, UsageError) as exc:
         raise Undetermined(f"run state has invalid nested data: {exc}") from exc
@@ -479,6 +484,8 @@ def add_finding(state: dict, finding_id: str, defect_id: str, severity: str, sum
             "decision": None,
             "resolved": False,
             "resolution_evidence": None,
+            "confirmed_round": None,
+            "confirmed_head": None,
         }
     )
 
@@ -490,13 +497,18 @@ def decide_finding(state: dict, finding_id: str, decision: str) -> None:
         raise UsageError(f"unknown finding: {finding_id}")
     if decision not in DECISIONS:
         raise UsageError(f"decision must be one of: {', '.join(sorted(DECISIONS))}")
-    if finding["decision"] != decision:
+    decision_changed = finding["decision"] != decision
+    if decision_changed:
         finding["resolved"] = False
         finding["resolution_evidence"] = None
     finding["decision"] = decision
     if decision == "rejected":
         finding["resolved"] = True
         finding["resolution_evidence"] = "rejected by adjudicator"
+    elif decision == "confirmed" and finding["severity"] in SEVERE:
+        if decision_changed or finding.get("confirmed_round") is None or finding.get("confirmed_head") is None:
+            finding["confirmed_round"] = state["review_round"]
+            finding["confirmed_head"] = state["tree"]["head"]
 
 
 def resolve_finding(state: dict, finding_id: str, evidence: str) -> None:
@@ -508,6 +520,15 @@ def resolve_finding(state: dict, finding_id: str, evidence: str) -> None:
         raise Refused("only a confirmed or suspected finding can be resolved")
     if not evidence.strip():
         raise UsageError("resolution evidence must not be empty")
+    if finding["decision"] == "confirmed" and finding["severity"] in SEVERE:
+        confirmed_round = finding.get("confirmed_round")
+        confirmed_head = finding.get("confirmed_head")
+        if confirmed_round is None or confirmed_head is None:
+            raise Undetermined("confirmed severe finding has no recorded review cycle and head")
+        if state["review_round"] <= confirmed_round:
+            raise Refused("confirmed P0/P1 finding requires a new implementation and review before resolution")
+        if state["tree"]["head"] == confirmed_head:
+            raise Refused("confirmed P0/P1 finding requires review of a corrected head before resolution")
     finding["resolved"] = True
     finding["resolution_evidence"] = evidence
 
