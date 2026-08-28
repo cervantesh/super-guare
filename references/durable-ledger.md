@@ -29,6 +29,13 @@ El directorio predeterminado es `.super-guare/runs/`. Añádelo a `.gitignore` s
 los recibos deben quedarse locales; exporta sólo snapshots redactados cuando el
 proyecto necesite un handoff durable.
 
+Al cargar un recibo, el ledger valida tanto los tipos como las relaciones entre
+el finding y las rondas persistidas: un origen, confirmación o resolución que
+afirme un `head` distinto de la ronda registrada se rechaza como
+`Undetermined`. Los recibos v1 que simplemente no contienen ese modelo nuevo
+siguen siendo legibles; lo que no pueden hacer es aportar evidencia severa que
+el ledger no pueda reconstruir.
+
 ## Grafo
 
 ```text
@@ -137,8 +144,23 @@ python scripts/runledger.py --dir .super-guare/runs --run SG-001 \
 ```
 
 La ronda no es un dato del revisor: el ledger la incrementa al entrar en
-`review` y la asigna al finding, evitando reiniciar el contador manualmente. Un
-P0/P1 no resuelto o no adjudicado bloquea `verify`. Después de corregirlo:
+`review` y fija el `head` que esa ronda revisó. Al crear un finding guarda por
+separado el `head` de su ronda de origen; al confirmarlo guarda la ronda de
+confirmación; y al resolverlo guarda el `head` y la ronda que aportaron la
+evidencia de resolución. Un P0/P1 no resuelto o no adjudicado bloquea `verify`.
+
+Para un P0/P1 confirmado, `verify` sólo lo considera cerrado si el origen y la
+confirmación son conocidos, una revisión posterior a la confirmación revisó un
+`head` distinto del origen y el árbol actual sigue siendo exactamente el
+`head` al que se ligó la resolución. Cambiar árbol, plan o roles después de
+revisar invalida esa evidencia hasta otra revisión; volver después al `head`
+de origen reabre el finding. La obligación persiste si el finding pasa de
+`confirmed` a `suspected`; sólo `rejected` la deja sin efecto y una nueva
+confirmación fija un nuevo momento de confirmación. Un recibo v1 heredado sin
+origen, momento o historial de confirmación reconstruible continúa cargando,
+pero no puede resolver un P0/P1: queda `Undetermined` en vez de inferir una
+prueba ausente.
+Después de corregirlo:
 
 ```bash
 python scripts/runledger.py --dir .super-guare/runs --run SG-001 \

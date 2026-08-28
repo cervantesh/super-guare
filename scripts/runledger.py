@@ -93,6 +93,7 @@ def new_run(
         "path": ["premise"],
         "max_rounds": max_rounds,
         "review_round": 0,
+        "review_heads": [],
         "generation": 0,
         "tree": {"repo": repo, "base": base, "head": head},
         "contract": None,
@@ -204,6 +205,71 @@ def load_state(path: str | Path) -> dict:
     return state
 
 
+def validate_finding_metadata(finding: dict, review_heads: dict[int, str], review_round: int) -> None:
+    """Reject coherent-looking finding fields that contradict durable review history."""
+    origin_head = finding.get("origin_review_head")
+    confirmation_round = finding.get("confirmation_round")
+    resolution_round = finding.get("resolution_round")
+    resolution_head = finding.get("resolution_head")
+    ever_confirmed = finding.get("ever_confirmed")
+    transient_confirmation_round = finding.get("confirmed_round")
+    transient_confirmation_head = finding.get("confirmed_head")
+    has_new_metadata = any(
+        key in finding
+        for key in (
+            "origin_review_head",
+            "confirmation_round",
+            "ever_confirmed",
+            "resolution_round",
+            "resolution_head",
+        )
+    )
+
+    if origin_head is not None:
+        if review_heads.get(finding["round"]) != origin_head:
+            raise ValueError("finding origin review head")
+    if (transient_confirmation_round is None) != (transient_confirmation_head is None):
+        raise ValueError("finding transient confirmation metadata")
+    if transient_confirmation_round is not None:
+        if ever_confirmed is not True:
+            raise ValueError("finding transient confirmation history")
+        if review_heads.get(transient_confirmation_round) != transient_confirmation_head:
+            raise ValueError("finding transient confirmation review")
+        if (
+            origin_head is None
+            or confirmation_round is None
+            or confirmation_round != transient_confirmation_round
+        ):
+            raise ValueError("finding transient confirmation cannot be reconciled")
+    if confirmation_round is not None:
+        if ever_confirmed is not True:
+            raise ValueError("finding confirmation history")
+        if (
+            confirmation_round < finding["round"]
+            or confirmation_round > review_round
+            or confirmation_round not in review_heads
+        ):
+            raise ValueError("finding confirmation round")
+    if (resolution_round is None) != (resolution_head is None):
+        raise ValueError("finding resolution metadata")
+    if resolution_round is not None:
+        if (
+            ever_confirmed is not True
+            or confirmation_round is None
+            or finding["decision"] not in {"confirmed", "suspected"}
+            or not finding["resolved"]
+        ):
+            raise ValueError("finding resolution history")
+        if resolution_round <= confirmation_round or review_heads.get(resolution_round) != resolution_head:
+            raise ValueError("finding resolution round")
+    if finding["severity"] in SEVERE and finding["decision"] == "confirmed" and has_new_metadata:
+        if ever_confirmed is not True or confirmation_round is None:
+            raise ValueError("finding confirmed metadata")
+    if finding["severity"] in SEVERE and ever_confirmed is True and finding["decision"] != "rejected":
+        if confirmation_round is None:
+            raise ValueError("finding confirmation history")
+
+
 def validate_state(state: dict) -> None:
     required = {
         "run_id": str,
@@ -239,6 +305,18 @@ def validate_state(state: dict) -> None:
         for key in ("repo", "base", "head"):
             if key not in state["tree"] or not isinstance(state["tree"][key], str):
                 raise ValueError(f"tree.{key}")
+        review_heads: dict[int, str] = {}
+        if "review_heads" in state:
+            if not isinstance(state["review_heads"], list):
+                raise ValueError("review heads")
+            seen_rounds: set[int] = set()
+            for review in state["review_heads"]:
+                if not isinstance(review, dict) or not isinstance(review.get("round"), int) or not isinstance(review.get("head"), str):
+                    raise ValueError("review head")
+                if review["round"] < 1 or review["round"] > state["review_round"] or review["round"] in seen_rounds:
+                    raise ValueError("review head round")
+                seen_rounds.add(review["round"])
+                review_heads[review["round"]] = review["head"]
         contract = state.get("contract")
         if contract is not None:
             for key, expected in (("path", str), ("sha256", str), ("bytes", int)):
@@ -267,6 +345,8 @@ def validate_state(state: dict) -> None:
                 raise ValueError("unit")
             if not isinstance(unit.get("covers"), list) or not isinstance(unit.get("depends_on"), list):
                 raise ValueError("unit fields")
+            if any(not isinstance(member, str) for member in unit["covers"] + unit["depends_on"]):
+                raise ValueError("unit member")
         for finding in state["findings"]:
             if not isinstance(finding, dict) or finding.get("severity") not in {"P0", "P1", "P2", "P3"}:
                 raise ValueError("finding")
@@ -275,6 +355,19 @@ def validate_state(state: dict) -> None:
             for key, expected in (("id", str), ("defect_id", str), ("summary", str), ("round", int)):
                 if not isinstance(finding.get(key), expected):
                     raise ValueError(f"finding.{key}")
+            for key, expected in (
+                ("confirmed_round", int),
+                ("confirmation_round", int),
+                ("confirmed_head", str),
+                ("origin_review_head", str),
+                ("resolution_round", int),
+                ("resolution_head", str),
+            ):
+                if key in finding and finding[key] is not None and not isinstance(finding[key], expected):
+                    raise ValueError(f"finding.{key}")
+            if "ever_confirmed" in finding and not isinstance(finding["ever_confirmed"], bool):
+                raise ValueError("finding.ever_confirmed")
+            validate_finding_metadata(finding, review_heads, state["review_round"])
     except (KeyError, TypeError, ValueError, UsageError) as exc:
         raise Undetermined(f"run state has invalid nested data: {exc}") from exc
 
@@ -469,6 +562,10 @@ def add_finding(state: dict, finding_id: str, defect_id: str, severity: str, sum
     round_number = state["review_round"]
     if round_number < 1:
         raise Undetermined("no review round has started")
+    try:
+        origin_review_head = reviewed_head(state, round_number)
+    except Undetermined:
+        origin_review_head = None
     state["findings"].append(
         {
             "id": finding_id,
@@ -479,8 +576,20 @@ def add_finding(state: dict, finding_id: str, defect_id: str, severity: str, sum
             "decision": None,
             "resolved": False,
             "resolution_evidence": None,
+            "origin_review_head": origin_review_head,
+            "confirmation_round": None,
+            "ever_confirmed": False,
+            "resolution_round": None,
+            "resolution_head": None,
         }
     )
+
+
+def reviewed_head(state: dict, round_number: int) -> str:
+    matches = [item for item in state.get("review_heads", []) if item.get("round") == round_number]
+    if len(matches) != 1:
+        raise Undetermined(f"review round {round_number} has no recorded reviewed head")
+    return matches[0]["head"]
 
 
 def decide_finding(state: dict, finding_id: str, decision: str) -> None:
@@ -490,13 +599,80 @@ def decide_finding(state: dict, finding_id: str, decision: str) -> None:
         raise UsageError(f"unknown finding: {finding_id}")
     if decision not in DECISIONS:
         raise UsageError(f"decision must be one of: {', '.join(sorted(DECISIONS))}")
-    if finding["decision"] != decision:
+    prior_decision = finding["decision"]
+    if finding["severity"] in SEVERE and prior_decision == "confirmed":
+        finding["ever_confirmed"] = True
+    decision_changed = prior_decision != decision
+    if decision_changed:
         finding["resolved"] = False
         finding["resolution_evidence"] = None
+        finding["resolution_round"] = None
+        finding["resolution_head"] = None
     finding["decision"] = decision
     if decision == "rejected":
         finding["resolved"] = True
         finding["resolution_evidence"] = "rejected by adjudicator"
+    elif decision == "confirmed" and finding["severity"] in SEVERE:
+        finding["ever_confirmed"] = True
+        if decision_changed:
+            finding["confirmation_round"] = state["review_round"]
+
+
+def requires_confirmed_severe_cycle(finding: dict) -> bool:
+    return (
+        finding["severity"] in SEVERE
+        and finding["decision"] != "rejected"
+        and (
+            finding.get("ever_confirmed", False)
+            or finding["decision"] == "confirmed"
+            or "ever_confirmed" not in finding
+            or finding.get("confirmed_round") is not None
+            or finding.get("confirmed_head") is not None
+        )
+    )
+
+
+def require_current_severe_cycle(state: dict, finding: dict) -> str:
+    origin_head = finding.get("origin_review_head")
+    confirmation_round = finding.get("confirmation_round")
+    if origin_head is None:
+        raise Undetermined("confirmed severe finding has no recorded origin reviewed head")
+    if confirmation_round is None:
+        raise Undetermined("confirmed severe finding has no recorded confirmation round")
+    if state["review_round"] <= confirmation_round:
+        raise Refused("confirmed P0/P1 finding requires a new implementation and review before resolution")
+    current_reviewed_head = reviewed_head(state, state["review_round"])
+    if state.get("requires_review") or state["tree"]["head"] != current_reviewed_head:
+        raise Refused("the current tree has not passed a new review")
+    if current_reviewed_head == origin_head:
+        raise Refused("confirmed P0/P1 finding requires review of a corrected head before resolution")
+    return current_reviewed_head
+
+
+def severe_finding_is_closed(state: dict, finding: dict) -> bool:
+    if finding["decision"] == "rejected":
+        return True
+    if not finding["resolved"]:
+        return False
+    if not requires_confirmed_severe_cycle(finding):
+        return True
+    origin_head = finding.get("origin_review_head")
+    confirmation_round = finding.get("confirmation_round")
+    resolution_round = finding.get("resolution_round")
+    resolution_head = finding.get("resolution_head")
+    if None in (origin_head, confirmation_round, resolution_round, resolution_head):
+        return False
+    if resolution_round <= confirmation_round or resolution_head == origin_head:
+        return False
+    if state.get("requires_review") or state["tree"]["head"] != resolution_head:
+        return False
+    try:
+        return (
+            reviewed_head(state, resolution_round) == resolution_head
+            and reviewed_head(state, state["review_round"]) == resolution_head
+        )
+    except Undetermined:
+        return False
 
 
 def resolve_finding(state: dict, finding_id: str, evidence: str) -> None:
@@ -508,6 +684,10 @@ def resolve_finding(state: dict, finding_id: str, evidence: str) -> None:
         raise Refused("only a confirmed or suspected finding can be resolved")
     if not evidence.strip():
         raise UsageError("resolution evidence must not be empty")
+    if requires_confirmed_severe_cycle(finding):
+        current_reviewed_head = require_current_severe_cycle(state, finding)
+        finding["resolution_round"] = state["review_round"]
+        finding["resolution_head"] = current_reviewed_head
     finding["resolved"] = True
     finding["resolution_evidence"] = evidence
 
@@ -517,8 +697,8 @@ def open_severe(state: dict) -> list[dict]:
         finding
         for finding in state["findings"]
         if finding["severity"] in SEVERE
-        and not finding["resolved"]
         and finding["decision"] != "rejected"
+        and not severe_finding_is_closed(state, finding)
     ]
 
 
@@ -609,6 +789,7 @@ def enter(state: dict, destination: str) -> None:
         state["checks"].pop("effect", None)
     if destination == "review":
         state["review_round"] += 1
+        state.setdefault("review_heads", []).append({"round": state["review_round"], "head": state["tree"]["head"]})
         state["requires_implementation"] = False
         state["requires_review"] = False
     state["node"] = destination
@@ -642,6 +823,8 @@ def build_snapshot(state: dict) -> dict:
             "roles": dict(state["roles"]),
             "criteria": [dict(item) for item in state["criteria"]],
             "units": [dict(item) for item in state["units"]],
+            "review_heads": [dict(item) for item in state.get("review_heads", [])],
+            "findings": [dict(item) for item in state["findings"]],
             "checks": dict(state["checks"]),
             "check_history": [dict(item) for item in state["check_history"]],
             "open_severe": [

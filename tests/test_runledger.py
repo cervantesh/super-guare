@@ -122,6 +122,111 @@ class RunLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(runledger.Refused, "DB-LOSS"):
             runledger.enter(self.state, "implement")
 
+    def test_confirmed_severe_finding_requires_a_new_implementation_and_review_before_resolution(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P0", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+
+        with self.assertRaisesRegex(runledger.Refused, "implementation and review"):
+            runledger.resolve_finding(self.state, "F1", "arbitrary evidence")
+
+        runledger.enter(self.state, "implement")
+        runledger.update_tree(self.state, head="corrected-head")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+        runledger.resolve_finding(self.state, "F1", "regression passes on corrected head")
+        snapshot = runledger.build_snapshot(self.state)
+        self.assertEqual(snapshot["content"]["findings"][0]["origin_review_head"], "head123")
+        self.assertEqual(snapshot["content"]["findings"][0]["resolution_head"], "corrected-head")
+        runledger.enter(self.state, "verify")
+
+    def test_confirmed_severe_finding_cannot_resolve_after_re_review_of_the_same_head(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.enter(self.state, "implement")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+
+        with self.assertRaisesRegex(runledger.Refused, "corrected head"):
+            runledger.resolve_finding(self.state, "F1", "same head was reviewed again")
+
+    def test_delayed_confirmation_keeps_the_finding_origin_separate_from_confirmation_timing(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        self.assertEqual(self.state["findings"][0].get("origin_review_head"), "head123")
+        runledger.enter(self.state, "implement")
+        runledger.update_tree(self.state, head="candidate-head")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        self.assertEqual(self.state["findings"][0].get("confirmation_round"), 2)
+        runledger.update_tree(self.state, head="head123")
+        runledger.enter(self.state, "implement")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+
+        with self.assertRaisesRegex(runledger.Refused, "corrected head"):
+            runledger.resolve_finding(self.state, "F1", "the original head was reviewed again")
+
+    def test_tree_changed_after_review_cannot_supply_resolution_proof_until_re_reviewed(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.enter(self.state, "implement")
+        runledger.update_tree(self.state, head="corrected-head")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+        runledger.update_tree(self.state, head="unreviewed-head")
+
+        with self.assertRaisesRegex(runledger.Refused, "new review"):
+            runledger.resolve_finding(self.state, "F1", "unreviewed head claims the correction")
+
+    def test_resolved_severe_finding_reopens_when_a_later_review_returns_to_its_origin_head(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.enter(self.state, "implement")
+        runledger.update_tree(self.state, head="corrected-head")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+        runledger.resolve_finding(self.state, "F1", "correction proved on corrected head")
+        runledger.enter(self.state, "verify")
+        runledger.enter(self.state, "adjudicate")
+        runledger.enter(self.state, "implement")
+        runledger.update_tree(self.state, head="head123")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+
+        with self.assertRaisesRegex(runledger.Refused, "F1"):
+            runledger.enter(self.state, "verify")
+
+    def test_confirmed_severe_finding_cannot_downgrade_to_suspected_to_bypass_correction(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.decide_finding(self.state, "F1", "suspected")
+
+        with self.assertRaisesRegex(runledger.Refused, "implementation and review"):
+            runledger.resolve_finding(self.state, "F1", "downgraded label")
+
+        with self.assertRaisesRegex(runledger.Refused, "F1"):
+            runledger.enter(self.state, "verify")
+
+    def test_explicit_rejection_remains_a_valid_severe_finding_disposition(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.decide_finding(self.state, "F1", "rejected")
+        runledger.enter(self.state, "verify")
+
+    def test_non_severe_finding_keeps_the_normal_same_cycle_resolution_flow(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "COPY", "P2", "Typo in a handoff")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.resolve_finding(self.state, "F1", "corrected copy")
+        runledger.enter(self.state, "verify")
+
     def test_ready_detour_does_not_bypass_convergence(self):
         self._to_adjudicate()
         runledger.add_finding(self.state, "F1", "DB-LOSS", "P0", "First occurrence")
@@ -244,6 +349,135 @@ class RunLedgerTests(unittest.TestCase):
 
         path.write_text('{"kind":"super-guare.run","version":1,"node":[]}', encoding="utf-8")
         with self.assertRaises(runledger.Undetermined):
+            runledger.load_state(path)
+
+    def test_non_string_unit_members_fail_closed_when_loading_persisted_state(self):
+        self.state["criteria"].append(
+            {"id": "AC1", "text": "Persist the repaired state", "status": "required", "reason": None}
+        )
+        self.state["units"].append({"id": "repair", "covers": ["AC1"], "depends_on": []})
+        path = runledger.state_path(self.root, self.state["run_id"])
+        runledger.save_state(path, self.state)
+        loaded = runledger.load_state(path)
+        self.assertEqual(loaded["units"][0], {"id": "repair", "covers": ["AC1"], "depends_on": []})
+        valid_payload = json.loads(path.read_text(encoding="utf-8"))
+
+        for member_field, invalid_member in (("covers", {"AC1": True}), ("depends_on", ["repair"])):
+            payload = json.loads(json.dumps(valid_payload))
+            payload["units"][0][member_field] = [invalid_member]
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.subTest(member_field=member_field):
+                with self.assertRaisesRegex(runledger.Undetermined, "unit member"):
+                    runledger.load_state(path)
+                result = subprocess.run(
+                    [sys.executable, str(MODULE_PATH), "--dir", str(self.root), "--run", self.state["run_id"], "enter", "implement"],
+                    text=True,
+                    capture_output=True,
+                    encoding="utf-8",
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("unit member", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_legacy_confirmed_severe_finding_cannot_downgrade_to_suspected_and_bypass_unknown_metadata(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        path = runledger.state_path(self.root, self.state["run_id"])
+        runledger.save_state(path, self.state)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("review_heads", None)
+        for key in (
+            "confirmed_round",
+            "confirmed_head",
+            "origin_review_head",
+            "confirmation_round",
+            "ever_confirmed",
+            "resolution_round",
+            "resolution_head",
+        ):
+            payload["findings"][0].pop(key, None)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        legacy = runledger.load_state(path)
+        runledger.decide_finding(legacy, "F1", "suspected")
+        with self.assertRaisesRegex(runledger.Undetermined, "origin"):
+            runledger.resolve_finding(legacy, "F1", "legacy evidence")
+
+    def test_legacy_severe_suspected_finding_with_no_history_fails_closed(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "suspected")
+        path = runledger.state_path(self.root, self.state["run_id"])
+        runledger.save_state(path, self.state)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("review_heads", None)
+        for key in (
+            "origin_review_head",
+            "confirmation_round",
+            "ever_confirmed",
+            "resolution_round",
+            "resolution_head",
+        ):
+            payload["findings"][0].pop(key, None)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        legacy = runledger.load_state(path)
+        with self.assertRaisesRegex(runledger.Undetermined, "origin"):
+            runledger.resolve_finding(legacy, "F1", "legacy suspected evidence")
+
+    def test_persisted_origin_head_must_match_the_finding_review_round(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.enter(self.state, "implement")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+        path = runledger.state_path(self.root, self.state["run_id"])
+        runledger.save_state(path, self.state)
+        self.assertEqual(runledger.load_state(path)["findings"][0]["origin_review_head"], "head123")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["findings"][0]["origin_review_head"] = "decoy-head"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with self.assertRaisesRegex(runledger.Undetermined, "origin review head"):
+            runledger.load_state(path)
+
+    def test_persisted_confirmation_history_cannot_contradict_ever_confirmed(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.decide_finding(self.state, "F1", "suspected")
+        path = runledger.state_path(self.root, self.state["run_id"])
+        runledger.save_state(path, self.state)
+        self.assertTrue(runledger.load_state(path)["findings"][0]["ever_confirmed"])
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["findings"][0]["ever_confirmed"] = False
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with self.assertRaisesRegex(runledger.Undetermined, "confirmation"):
+            runledger.load_state(path)
+
+    def test_transient_confirmation_pair_cannot_bypass_a_severe_suspected_finding(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "suspected")
+        path = runledger.state_path(self.root, self.state["run_id"])
+        runledger.save_state(path, self.state)
+        self.state["findings"][0].update(
+            {"confirmed_round": 1, "confirmed_head": "head123", "ever_confirmed": False}
+        )
+        with self.assertRaisesRegex(runledger.Undetermined, "confirmation"):
+            runledger.resolve_finding(self.state, "F1", "in-memory hybrid evidence")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["findings"][0].update(
+            {"confirmed_round": 1, "confirmed_head": "head123", "ever_confirmed": False}
+        )
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with self.assertRaisesRegex(runledger.Undetermined, "transient confirmation"):
             runledger.load_state(path)
 
     def test_stale_writer_is_refused_instead_of_losing_an_update(self):
