@@ -33,22 +33,25 @@ change can grant or deny access. The report has not yet been reproduced, and a
 focused unit test can call the helper directly. The diff is expected to be one
 line and reversible.
 
-## Development pair: documentation vs session identity
+## Development pair: display-only default vs session identity
 
-### D3 — documentation paragraph
+### D3 — display-only default
 
-The user explicitly invokes `$super-guare` to add one user-supplied paragraph to
-`README.md`. One file changes; no generated copy, code, links, commands, public
-API, release contract, or external state is affected. Verification is the
-rendered paragraph plus a local-link and diff check. There is no defect to
-reproduce.
+The user explicitly invokes `$super-guare` to change the default string from
+`untitled` to `new-chat` in a single file. The edit is one line. A focused unit
+test asserts the default string and the diff is checked. The default is
+display-only; no generated copy, code, links, commands, public API, release
+contract, or external state is affected. There is no defect to reproduce.
 
 ### D4 — session identity default
 
-The user explicitly invokes `$super-guare` to change one default string in a
-single file. The string is the affinity identity used to isolate concurrent
-chat sessions; a collision can route one conversation into another session.
-The edit is one line and has a focused unit test.
+The user explicitly invokes `$super-guare` to change the default string from
+`untitled` to `new-chat` in a single file. The edit is one line. A focused unit
+test asserts the default string and the diff is checked. The default is the
+affinity identity used to isolate concurrent chat sessions; a collision can
+route one conversation into another session. No generated copy, code, links,
+commands, public API, release contract, or external state is affected. There is
+no defect to reproduce.
 
 ## Held-out pair: evidence drift
 
