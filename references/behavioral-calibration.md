@@ -110,7 +110,7 @@ El paquete histórico fijado en
 `639f01979f8b251511af2f5bf24fb107c0298a79e3dd75ab11c219291215a202`.
 El paquete corregido actual es
 [direct-routing-cases.md](calibration/direct-routing-cases.md), con SHA-256
-`9dca040ea618818b0d87de67b6ad9d295e99334bbb7cb03f37c177c170b84375`.
+`6b18b4a6c9845a76317716dfed52ee137d7ba50b39038f4f9368f66ffe29d7e9`.
 El hash actual identifica el artefacto corregido; no convierte el resumen
 histórico en evidencia de una ejecución.
 
