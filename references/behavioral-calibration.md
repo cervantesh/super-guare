@@ -97,22 +97,33 @@ conductual, conserva la versión más pequeña del skill.
 
 ## Registro de decisiones de calibración
 
-### 2026-08-28 — puerta explícita `DIRECT/SUPER`: `NO CHANGE`
+### 2026-08-28 — puerta explícita `DIRECT/SUPER`: `UNVERIFIED`
 
-Se evaluó añadir una puerta que, incluso tras una invocación explícita de
-`$super-guare`, emitiera un recibo `DIRECT` y terminara toda obligación de
-SUPER para trabajo local y reversible. El control fue
-`main@b2687913c06378a8bef162cbd1c4b273dc0477b9`; el paquete fijado está en
-[direct-routing-cases.md](calibration/direct-routing-cases.md), con SHA-256
+Este es un registro histórico cuya clasificación formal es `UNVERIFIED`, no
+`NO CHANGE`. Se exploró añadir una puerta que, incluso tras una invocación
+explícita de `$super-guare`, emitiera un recibo `DIRECT` y terminara toda
+obligación de SUPER para trabajo local y reversible. El control declarado fue
+`main@b2687913c06378a8bef162cbd1c4b273dc0477b9`.
+
+El paquete histórico fijado en
+`a5595461609e1267c6312b4f562dc74f5fdf8baf` tenía SHA-256
 `639f01979f8b251511af2f5bf24fb107c0298a79e3dd75ab11c219291215a202`.
+El paquete corregido actual es
+[direct-routing-cases.md](calibration/direct-routing-cases.md), con SHA-256
+`9dca040ea618818b0d87de67b6ad9d295e99334bbb7cb03f37c177c170b84375`.
+El hash actual identifica el artefacto corregido; no convierte el resumen
+histórico en evidencia de una ejecución.
 
-Configuración conocida: dos ejecuciones independientes de control y dos de
-treatment, contextos frescos, familia OpenAI `gpt-5.6-sol`, razonamiento alto,
-mismo paquete, sólo lectura y sin red. El evaluador no recibió el resultado de
-la otra variante. El runtime no expuso temperatura ni conteo de tokens, por lo
-que esos campos quedan como `no pude mirar`.
+Se conserva una configuración resumida: dos ejecuciones independientes de
+control y dos de treatment, contextos frescos, familia OpenAI `gpt-5.6-sol`,
+razonamiento alto, mismo paquete, sólo lectura y sin red; el evaluador no
+recibió el resultado de la otra variante. No se conservan los recibos
+estructurados por ejecución ni los campos de runtime necesarios para verificarlos
+(incluidos temperatura y conteo de tokens). La tabla siguiente es sólo el
+resumen colapsado disponible, no una reconstrucción ni una sustitución de esos
+recibos ausentes.
 
-| Caso | Control vigente | Treatment experimental | Adjudicación |
+| Caso | Control resumido | Treatment resumido | Observación resumida |
 |---|---|---|---|
 | D1 | Trabajo ordinario; reproducir y probar localmente | `DIRECT` con recibo compacto | Sin cambio material |
 | D2 | SUPER por permisos | SUPER por permisos | Seguridad conservada |
@@ -123,15 +134,15 @@ que esos campos quedan como `no pude mirar`.
 | H2A | Preferir la solución local de menor superficie | `DIRECT` | Sin cambio material |
 | H2B | Rechazar la dependencia inestable sin ampliar el proceso | Una repetición convirtió el candidato descartado en SUPER | Sobreescalada |
 
-El control ya hacía la distinción que se buscaba: trabajo sencillo por flujo
-ordinario y fronteras de permisos o identidad por SUPER. La candidata no
-corrigió una decisión equivocada y, bajo repetición, confundió dos motivos para
-detener o descartar una alternativa con razones para activar toda la ceremonia:
+Si recibos válidos por ejecución respaldaran esas observaciones resumidas de
+H1B y H2B, la clasificación formal sería `FAIL`, no `NO CHANGE`: la candidata
+habría sobreescalado evidencia obsoleta que exige **refrescar antes de decidir**
+y el rechazo de una alternativa de mayor acoplamiento que no vuelve riesgosa la
+tarea base. Sin esos recibos no se puede afirmar ese `FAIL` ni ningún resultado
+formal por caso; sólo se puede conservar la observación provisional y el estado
+global `UNVERIFIED`.
 
-- evidencia obsoleta exige **refrescar antes de decidir**, no SUPER por sí sola;
-- rechazar una opción de mayor acoplamiento no vuelve riesgosa la tarea base.
-
-Se descartó la candidata y no se cambió `SKILL.md`. Este registro se conserva
-porque demuestra tanto la ausencia de beneficio como las regresiones que debe
-evitar una propuesta futura. No es evidencia sobre un issue vivo ni una regla
-adicional del playbook.
+No se reejecutaron ni se reconstruyeron retroactivamente las cuatro evaluaciones,
+y no se presentan salidas inventadas como recibos crudos. `SKILL.md` no cambió.
+Este registro no es evidencia sobre un issue vivo ni una regla adicional del
+playbook.
