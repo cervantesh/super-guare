@@ -148,6 +148,52 @@ class RunLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(runledger.Refused, "corrected head"):
             runledger.resolve_finding(self.state, "F1", "same head was reviewed again")
 
+    def test_confirmed_severe_finding_binds_to_the_head_that_was_reviewed(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.update_tree(self.state, head="decoy-head")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        self.assertEqual(self.state["findings"][0]["confirmed_head"], "head123")
+        runledger.update_tree(self.state, head="head123")
+        runledger.enter(self.state, "implement")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+
+        with self.assertRaisesRegex(runledger.Refused, "corrected head"):
+            runledger.resolve_finding(self.state, "F1", "the original head was reviewed again")
+
+    def test_tree_changed_after_review_cannot_supply_resolution_proof_until_re_reviewed(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.enter(self.state, "implement")
+        runledger.update_tree(self.state, head="corrected-head")
+        runledger.enter(self.state, "review")
+        runledger.enter(self.state, "adjudicate")
+        runledger.update_tree(self.state, head="unreviewed-head")
+
+        with self.assertRaisesRegex(runledger.Refused, "new review"):
+            runledger.resolve_finding(self.state, "F1", "unreviewed head claims the correction")
+
+    def test_confirmed_severe_finding_cannot_downgrade_to_suspected_to_bypass_correction(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.decide_finding(self.state, "F1", "suspected")
+
+        with self.assertRaisesRegex(runledger.Refused, "implementation and review"):
+            runledger.resolve_finding(self.state, "F1", "downgraded label")
+
+        with self.assertRaisesRegex(runledger.Refused, "F1"):
+            runledger.enter(self.state, "verify")
+
+    def test_explicit_rejection_remains_a_valid_severe_finding_disposition(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        runledger.decide_finding(self.state, "F1", "rejected")
+        runledger.enter(self.state, "verify")
+
     def test_non_severe_finding_keeps_the_normal_same_cycle_resolution_flow(self):
         self._to_adjudicate()
         runledger.add_finding(self.state, "F1", "COPY", "P2", "Typo in a handoff")
@@ -308,6 +354,22 @@ class RunLedgerTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("unit member", result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
+
+    def test_legacy_confirmed_severe_finding_without_review_metadata_loads_but_fails_closed(self):
+        self._to_adjudicate()
+        runledger.add_finding(self.state, "F1", "DB-LOSS", "P1", "Write can disappear")
+        runledger.decide_finding(self.state, "F1", "confirmed")
+        path = runledger.state_path(self.root, self.state["run_id"])
+        runledger.save_state(path, self.state)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("review_heads", None)
+        payload["findings"][0].pop("confirmed_round", None)
+        payload["findings"][0].pop("confirmed_head", None)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        legacy = runledger.load_state(path)
+        with self.assertRaisesRegex(runledger.Undetermined, "recorded review"):
+            runledger.resolve_finding(legacy, "F1", "legacy evidence")
 
     def test_stale_writer_is_refused_instead_of_losing_an_update(self):
         path = runledger.state_path(self.root, self.state["run_id"])

@@ -93,6 +93,7 @@ def new_run(
         "path": ["premise"],
         "max_rounds": max_rounds,
         "review_round": 0,
+        "review_heads": [],
         "generation": 0,
         "tree": {"repo": repo, "base": base, "head": head},
         "contract": None,
@@ -239,6 +240,16 @@ def validate_state(state: dict) -> None:
         for key in ("repo", "base", "head"):
             if key not in state["tree"] or not isinstance(state["tree"][key], str):
                 raise ValueError(f"tree.{key}")
+        if "review_heads" in state:
+            if not isinstance(state["review_heads"], list):
+                raise ValueError("review heads")
+            seen_rounds: set[int] = set()
+            for review in state["review_heads"]:
+                if not isinstance(review, dict) or not isinstance(review.get("round"), int) or not isinstance(review.get("head"), str):
+                    raise ValueError("review head")
+                if review["round"] < 1 or review["round"] > state["review_round"] or review["round"] in seen_rounds:
+                    raise ValueError("review head round")
+                seen_rounds.add(review["round"])
         contract = state.get("contract")
         if contract is not None:
             for key, expected in (("path", str), ("sha256", str), ("bytes", int)):
@@ -490,6 +501,13 @@ def add_finding(state: dict, finding_id: str, defect_id: str, severity: str, sum
     )
 
 
+def reviewed_head(state: dict, round_number: int) -> str:
+    matches = [item for item in state.get("review_heads", []) if item.get("round") == round_number]
+    if len(matches) != 1:
+        raise Undetermined(f"review round {round_number} has no recorded reviewed head")
+    return matches[0]["head"]
+
+
 def decide_finding(state: dict, finding_id: str, decision: str) -> None:
     require_phase(state, "decide finding", {"adjudicate"})
     finding = _find(state["findings"], finding_id)
@@ -508,7 +526,7 @@ def decide_finding(state: dict, finding_id: str, decision: str) -> None:
     elif decision == "confirmed" and finding["severity"] in SEVERE:
         if decision_changed or finding.get("confirmed_round") is None or finding.get("confirmed_head") is None:
             finding["confirmed_round"] = state["review_round"]
-            finding["confirmed_head"] = state["tree"]["head"]
+            finding["confirmed_head"] = reviewed_head(state, state["review_round"])
 
 
 def resolve_finding(state: dict, finding_id: str, evidence: str) -> None:
@@ -520,14 +538,26 @@ def resolve_finding(state: dict, finding_id: str, evidence: str) -> None:
         raise Refused("only a confirmed or suspected finding can be resolved")
     if not evidence.strip():
         raise UsageError("resolution evidence must not be empty")
-    if finding["decision"] == "confirmed" and finding["severity"] in SEVERE:
+    has_confirmed_severe_obligation = (
+        finding["severity"] in SEVERE
+        and finding["decision"] != "rejected"
+        and (
+            finding["decision"] == "confirmed"
+            or finding.get("confirmed_round") is not None
+            or finding.get("confirmed_head") is not None
+        )
+    )
+    if has_confirmed_severe_obligation:
         confirmed_round = finding.get("confirmed_round")
         confirmed_head = finding.get("confirmed_head")
         if confirmed_round is None or confirmed_head is None:
             raise Undetermined("confirmed severe finding has no recorded review cycle and head")
         if state["review_round"] <= confirmed_round:
             raise Refused("confirmed P0/P1 finding requires a new implementation and review before resolution")
-        if state["tree"]["head"] == confirmed_head:
+        current_reviewed_head = reviewed_head(state, state["review_round"])
+        if state.get("requires_review") or state["tree"]["head"] != current_reviewed_head:
+            raise Refused("the current tree has not passed a new review")
+        if current_reviewed_head == confirmed_head:
             raise Refused("confirmed P0/P1 finding requires review of a corrected head before resolution")
     finding["resolved"] = True
     finding["resolution_evidence"] = evidence
@@ -630,6 +660,7 @@ def enter(state: dict, destination: str) -> None:
         state["checks"].pop("effect", None)
     if destination == "review":
         state["review_round"] += 1
+        state.setdefault("review_heads", []).append({"round": state["review_round"], "head": state["tree"]["head"]})
         state["requires_implementation"] = False
         state["requires_review"] = False
     state["node"] = destination
@@ -663,6 +694,7 @@ def build_snapshot(state: dict) -> dict:
             "roles": dict(state["roles"]),
             "criteria": [dict(item) for item in state["criteria"]],
             "units": [dict(item) for item in state["units"]],
+            "review_heads": [dict(item) for item in state.get("review_heads", [])],
             "checks": dict(state["checks"]),
             "check_history": [dict(item) for item in state["check_history"]],
             "open_severe": [

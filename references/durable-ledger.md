@@ -137,11 +137,15 @@ python scripts/runledger.py --dir .super-guare/runs --run SG-001 \
 ```
 
 La ronda no es un dato del revisor: el ledger la incrementa al entrar en
-`review` y la asigna al finding, evitando reiniciar el contador manualmente. Un
-P0/P1 no resuelto o no adjudicado bloquea `verify`. Si un P0/P1 queda
-confirmado, su resolución exige una implementación y una revisión posteriores
-sobre un `head` distinto del que originó el finding; evidencia añadida en la
-misma adjudicación no puede cerrar el ciclo. Después de corregirlo:
+`review`, fija el `head` que esa ronda revisó y asigna la ronda al finding,
+evitando reiniciar el contador manualmente. Un P0/P1 no resuelto o no
+adjudicado bloquea `verify`. Si un P0/P1 queda confirmado, su resolución exige
+una implementación y una revisión posteriores sobre un `head` revisado y
+distinto del que originó el finding; evidencia añadida en la misma adjudicación
+no puede cerrar el ciclo. Cambiar árbol, plan o roles después de revisar
+invalida esa evidencia hasta otra revisión. La obligación persiste si el
+finding pasa de `confirmed` a `suspected`; sólo `rejected` la descarta y una
+nueva confirmación vuelve a fijar el ciclo. Después de corregirlo:
 
 ```bash
 python scripts/runledger.py --dir .super-guare/runs --run SG-001 \
