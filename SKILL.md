@@ -112,6 +112,25 @@ La implementación no empieza mientras ese contrato siga viviendo sólo en el
 razonamiento del SUPER o en mensajes dispersos. Si cambia, congela una nueva
 versión y explica qué evidencia anterior quedó invalidada.
 
+### Ledger durable cuando cruza sesiones o roles
+
+Si el flujo llega a implementación/revisión y abarca varios agentes, worktrees,
+motores externos o sesiones, usa el ledger incluido en
+[`scripts/runledger.py`](scripts/runledger.py) y sigue
+[`references/durable-ledger.md`](references/durable-ledger.md). No lo actives
+para una investigación breve de sólo lectura: persistir estado sin una frontera
+de reanudación no añade garantía proporcional.
+
+El ledger hace ejecutables las transiciones, el hash del contrato, la cobertura
+criterio→unidad, la separación de familias, la identidad de defectos, el
+presupuesto de corrección y el check de efecto actual. Es un guard de
+consistencia, no evidencia técnica: SHAs, familias, criterios y resultados que
+el SUPER registra siguen necesitando comprobación independiente. Un rechazo o
+`undetermined` del ledger detiene el flujo; `--force` no existe.
+Sólo el SUPER lo muta; los guares devuelven artefactos y nunca escriben el mismo
+`run.json`. El lock y la generación rechazan un segundo escritor o una copia
+obsoleta en vez de perder una actualización.
+
 Usa un presupuesto como señal de partición, no como sustituto del juicio. Si el
 trabajo previsto supera aproximadamente **25 archivos o 3 contratos
 compartidos**, intenta dividirlo en slices que puedan implementarse, probarse,
